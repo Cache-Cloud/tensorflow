@@ -46,7 +46,6 @@ limitations under the License.
 #include "absl/types/span.h"
 #include "llvm/ADT/STLExtras.h"
 #include "xla/backends/gpu/collectives/gpu_clique_key.h"
-#include "xla/backends/gpu/collectives/gpu_collectives.h"
 #include "xla/backends/gpu/runtime/all_gather_thunk.h"
 #include "xla/backends/gpu/runtime/all_reduce_thunk.h"
 #include "xla/backends/gpu/runtime/all_to_all_thunk.h"
@@ -62,6 +61,7 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/shaped_slice.h"
 #include "xla/backends/gpu/runtime/thunk.h"
 #include "xla/backends/gpu/runtime/while_thunk.h"
+#include "xla/core/collectives/communicator.h"
 #include "xla/debug_options_flags.h"
 #include "xla/executable_run_options.h"
 #include "xla/ffi/call_frame.h"
@@ -70,6 +70,7 @@ limitations under the License.
 #include "xla/literal.h"
 #include "xla/literal_util.h"
 #include "xla/runtime/buffer_use.h"
+#include "xla/runtime/device_id.h"
 #include "xla/runtime/execution_graph.h"
 #include "xla/runtime/resource_use.h"
 #include "xla/service/buffer_assignment.h"
@@ -77,7 +78,6 @@ limitations under the License.
 #include "xla/service/computation_placer.h"
 #include "xla/service/custom_call_status.h"
 #include "xla/service/custom_call_status_internal.h"
-#include "xla/service/global_device_id.h"
 #include "xla/service/gpu/buffer_allocations.h"
 #include "xla/service/gpu/kernels/custom_kernel.h"
 #include "xla/service/gpu/launch_dimensions.h"
@@ -2151,17 +2151,21 @@ absl::StatusOr<const se::CommandBuffer::Command*> AllReduceCmd::Record(
   }
 
   TF_ASSIGN_OR_RETURN(
-      CommunicatorHandle comm_handle,
-      GetComm(*execute_params.collective_params,
-              *execute_params.collective_cliques, config().replica_groups,
-              config().group_mode,
-              AsyncStreamKind::ASYNC_STREAM_KIND_COLLECTIVE));  // Use constant
+      GpuCliqueKey clique_key,
+      GetGpuCliqueKey(*execute_params.collective_params,
+                      config().replica_groups, config().group_mode,
+                      AsyncStreamKind::ASYNC_STREAM_KIND_COLLECTIVE));
+
+  TF_ASSIGN_OR_RETURN(
+      Communicator * comm,
+      execute_params.collective_cliques->GetComm(
+          clique_key, execute_params.collective_params->global_device_id));
 
   return RecordTracedCommand(
       execute_params, record_params, std::move(record_action), command_buffer,
       [&](se::Stream* stream) {
-        return RunAllReduce(reduction_kind_, device_buffers, *stream,
-                            comm_handle.comm, config().use_symmetric_buffer);
+        return RunAllReduce(reduction_kind_, device_buffers, *stream, *comm,
+                            config().use_symmetric_buffer);
       });
 }
 
@@ -2214,18 +2218,21 @@ absl::StatusOr<const se::CommandBuffer::Command*> ReduceScatterCmd::Record(
   }
 
   TF_ASSIGN_OR_RETURN(
-      CommunicatorHandle comm_handle,
-      GetComm(*execute_params.collective_params,
-              *execute_params.collective_cliques, config().replica_groups,
-              config().group_mode,
-              AsyncStreamKind::ASYNC_STREAM_KIND_COLLECTIVE));  // Use constant
+      GpuCliqueKey clique_key,
+      GetGpuCliqueKey(*execute_params.collective_params,
+                      config().replica_groups, config().group_mode,
+                      AsyncStreamKind::ASYNC_STREAM_KIND_COLLECTIVE));
+
+  TF_ASSIGN_OR_RETURN(
+      Communicator * comm,
+      execute_params.collective_cliques->GetComm(
+          clique_key, execute_params.collective_params->global_device_id));
 
   return RecordTracedCommand(execute_params, record_params, record_action,
                              command_buffer, [&](se::Stream* stream) {
                                return RunReduceScatter(
                                    reduction_kind_, device_buffers, *stream,
-                                   comm_handle.comm,
-                                   config().use_symmetric_buffer);
+                                   *comm, config().use_symmetric_buffer);
                              });
 }
 
@@ -2278,18 +2285,22 @@ absl::StatusOr<const se::CommandBuffer::Command*> AllToAllCmd::Record(
   }
 
   TF_ASSIGN_OR_RETURN(
-      CommunicatorHandle comm_handle,
-      GetComm(*execute_params.collective_params,
-              *execute_params.collective_cliques, config().replica_groups,
-              config().group_mode,
-              AsyncStreamKind::ASYNC_STREAM_KIND_COLLECTIVE));  // Use constant
+      GpuCliqueKey clique_key,
+      GetGpuCliqueKey(*execute_params.collective_params,
+                      config().replica_groups, config().group_mode,
+                      AsyncStreamKind::ASYNC_STREAM_KIND_COLLECTIVE));
+
+  TF_ASSIGN_OR_RETURN(
+      Communicator * comm,
+      execute_params.collective_cliques->GetComm(
+          clique_key, execute_params.collective_params->global_device_id));
 
   // MemCpy case is not currently supported in CommandBuffer.
   return RecordTracedCommand(
       execute_params, record_params, std::move(record_action), command_buffer,
       [&](se::Stream* stream) {
-        return RunAllToAll(has_split_dimension_, device_buffers, *stream,
-                           comm_handle.comm, config().use_symmetric_buffer);
+        return RunAllToAll(has_split_dimension_, device_buffers, *stream, *comm,
+                           config().use_symmetric_buffer);
       });
 }
 
@@ -2339,16 +2350,20 @@ absl::StatusOr<const se::CommandBuffer::Command*> AllGatherCmd::Record(
   }
 
   TF_ASSIGN_OR_RETURN(
-      CommunicatorHandle comm_handle,
-      GetComm(*execute_params.collective_params,
-              *execute_params.collective_cliques, config().replica_groups,
-              config().group_mode,
-              AsyncStreamKind::ASYNC_STREAM_KIND_COLLECTIVE));  // Use constant
+      GpuCliqueKey clique_key,
+      GetGpuCliqueKey(*execute_params.collective_params,
+                      config().replica_groups, config().group_mode,
+                      AsyncStreamKind::ASYNC_STREAM_KIND_COLLECTIVE));
+
+  TF_ASSIGN_OR_RETURN(
+      Communicator * comm,
+      execute_params.collective_cliques->GetComm(
+          clique_key, execute_params.collective_params->global_device_id));
 
   return RecordTracedCommand(
       execute_params, record_params, std::move(record_action), command_buffer,
       [&](se::Stream* stream) {
-        return RunAllGather(device_buffers, *stream, comm_handle.comm,
+        return RunAllGather(device_buffers, *stream, *comm,
                             config().use_symmetric_buffer);
       });
 }
@@ -2400,18 +2415,21 @@ CollectiveBroadcastCmd::Record(const Thunk::ExecuteParams& execute_params,
   }
 
   TF_ASSIGN_OR_RETURN(
-      CommunicatorHandle comm_handle,
-      GetComm(*execute_params.collective_params,
-              *execute_params.collective_cliques, config().replica_groups,
-              config().group_mode,
-              AsyncStreamKind::ASYNC_STREAM_KIND_COLLECTIVE));  // Use constant
+      GpuCliqueKey clique_key,
+      GetGpuCliqueKey(*execute_params.collective_params,
+                      config().replica_groups, config().group_mode,
+                      AsyncStreamKind::ASYNC_STREAM_KIND_COLLECTIVE));
 
-  return RecordTracedCommand(execute_params, record_params,
-                             std::move(record_action), command_buffer,
-                             [&](se::Stream* stream) {
-                               return RunCollectiveBroadcast(
-                                   device_buffers, *stream, comm_handle.comm);
-                             });
+  TF_ASSIGN_OR_RETURN(
+      Communicator * comm,
+      execute_params.collective_cliques->GetComm(
+          clique_key, execute_params.collective_params->global_device_id));
+
+  return RecordTracedCommand(
+      execute_params, record_params, std::move(record_action), command_buffer,
+      [&](se::Stream* stream) {
+        return RunCollectiveBroadcast(device_buffers, *stream, *comm);
+      });
 }
 
 CommandBufferCmd::BufferUseVector CollectiveBroadcastCmd::buffers() const {
@@ -2462,11 +2480,15 @@ absl::StatusOr<const se::CommandBuffer::Command*> CollectivePermuteCmd::Record(
   }
 
   TF_ASSIGN_OR_RETURN(
-      CommunicatorHandle comm_handle,
-      GetComm(*execute_params.collective_params,
-              *execute_params.collective_cliques, config().replica_groups,
-              config().group_mode,
-              AsyncStreamKind::ASYNC_STREAM_KIND_COLLECTIVE));  // Use constant
+      GpuCliqueKey clique_key,
+      GetGpuCliqueKey(*execute_params.collective_params,
+                      config().replica_groups, config().group_mode,
+                      AsyncStreamKind::ASYNC_STREAM_KIND_COLLECTIVE));
+
+  TF_ASSIGN_OR_RETURN(
+      Communicator * comm,
+      execute_params.collective_cliques->GetComm(
+          clique_key, execute_params.collective_params->global_device_id));
 
   std::string device_string =
       CollectiveThunk::GetDeviceString(*execute_params.collective_params);
@@ -2484,7 +2506,7 @@ absl::StatusOr<const se::CommandBuffer::Command*> CollectivePermuteCmd::Record(
       execute_params, record_params, std::move(record_action), command_buffer,
       [&](se::Stream* stream) {
         return RunCollectivePermute(source_target, device_buffers, *stream,
-                                    comm_handle.comm, device_string, current_id,
+                                    *comm, device_string, current_id,
                                     /*use_memcpy=*/false,
                                     /*recv_ptr_map=*/nullptr,
                                     use_symmetric_buffer);

@@ -36,8 +36,6 @@ limitations under the License.
 #include "absl/time/time.h"
 #include "absl/types/span.h"
 #include "xla/backends/gpu/collectives/gpu_clique_key.h"
-#include "xla/backends/gpu/collectives/gpu_collectives.h"
-#include "xla/backends/gpu/runtime/collective_cliques.h"
 #include "xla/backends/gpu/runtime/collective_execution.h"
 #include "xla/backends/gpu/runtime/collective_params.h"
 #include "xla/backends/gpu/runtime/thunk.h"
@@ -47,9 +45,7 @@ limitations under the License.
 #include "xla/hlo/ir/collective_op_group_mode.h"
 #include "xla/primitive_util.h"
 #include "xla/runtime/device_id.h"
-#include "xla/service/collective_ops_utils.h"
 #include "xla/service/computation_placer.h"
-#include "xla/service/global_device_id.h"
 #include "xla/service/gpu/buffer_allocations.h"
 #include "xla/service/rendezvous.h"
 #include "xla/shape.h"
@@ -298,10 +294,18 @@ absl::Status CollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
       "[%d] Starting %s %s.", params.stream->parent()->device_ordinal(),
       IsAsync() ? "async" : "sync", Thunk::KindToString(kind()));
   AsyncStreamKind stream_kind = GetAsyncStreamKind();
+
   TF_ASSIGN_OR_RETURN(
-      CommunicatorHandle comm_handle,
-      GetComm(*params.collective_params, *params.collective_cliques,
-              config().replica_groups, config().group_mode, stream_kind));
+      GpuCliqueKey clique_key,
+      GetGpuCliqueKey(*params.collective_params, config().replica_groups,
+                      config().group_mode, stream_kind));
+
+  TF_ASSIGN_OR_RETURN(
+      Communicator * comm,
+      params.collective_cliques->GetComm(
+          clique_key, params.collective_params->global_device_id));
+  DCHECK(comm) << "Failed to get communicator for collective operation";
+
   se::StreamExecutor* executor = params.stream->parent();
   int64_t async_stream_idx = static_cast<int64_t>(stream_kind);
 
@@ -315,7 +319,7 @@ absl::Status CollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
     TF_RETURN_IF_ERROR(async_stream.WaitFor(params.stream));
 
     TF_ASSIGN_OR_RETURN(is_first_rendezvous_needed,
-                        RunCollective(params, async_stream, comm_handle));
+                        RunCollective(params, clique_key, async_stream, *comm));
 
     // Record collective operation completion.
     TF_ASSIGN_OR_RETURN(se::Event * event, async_events_->GetEvent(executor));
@@ -323,8 +327,9 @@ absl::Status CollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
 
   } else {
     // Launch collective operation on a main stream.
-    TF_ASSIGN_OR_RETURN(is_first_rendezvous_needed,
-                        RunCollective(params, *params.stream, comm_handle));
+    TF_ASSIGN_OR_RETURN(
+        is_first_rendezvous_needed,
+        RunCollective(params, clique_key, *params.stream, *comm));
   }
 
   // After a first execution of this instance of collective operation do a
@@ -333,7 +338,6 @@ absl::Status CollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
   // ahead on one rank leads to deadlocks in NCCL.
   if (is_first_rendezvous_needed &&
       !first_call_rendezvous_flag_.IsCompleted()) {
-    GpuCliqueKey clique_key = comm_handle.clique_key;
     size_t num_local_participants = clique_key.num_local_participants();
 
     auto global_device_id = params.collective_params->global_device_id;
@@ -374,11 +378,16 @@ absl::Status CollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
 absl::StatusOr<std::vector<Communicator*>> CollectiveThunk::GetCommunicators(
     const ExecuteParams& params) const {
   AsyncStreamKind stream_kind = GetAsyncStreamKind();
+
   TF_ASSIGN_OR_RETURN(
-      CommunicatorHandle comm_handle,
-      GetComm(*params.collective_params, *params.collective_cliques,
-              config().replica_groups, config().group_mode, stream_kind));
-  return std::vector<Communicator*>{comm_handle.comm};
+      GpuCliqueKey clique_key,
+      GetGpuCliqueKey(*params.collective_params, config().replica_groups,
+                      config().group_mode, stream_kind));
+  TF_ASSIGN_OR_RETURN(
+      Communicator * comm,
+      params.collective_cliques->GetComm(
+          clique_key, params.collective_params->global_device_id));
+  return std::vector<Communicator*>{comm};
 }
 
 std::string CollectiveThunk::GetDeviceString(

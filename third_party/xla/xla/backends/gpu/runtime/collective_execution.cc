@@ -16,7 +16,6 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/collective_execution.h"
 
 #include <cstdint>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -28,7 +27,6 @@ limitations under the License.
 #include "xla/backends/gpu/runtime/collective_cliques.h"
 #include "xla/backends/gpu/runtime/collective_params.h"
 #include "xla/core/collectives/communicator.h"
-#include "xla/core/collectives/rank_id.h"
 #include "xla/debug_options_flags.h"
 #include "xla/runtime/device_id.h"
 #include "xla/service/collective_ops_utils.h"
@@ -130,21 +128,6 @@ absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
   return GpuCliqueKey(std::move(participants), num_local_participants,
                       xla::gpu::IsP2PStreamKind(stream_kind),
                       std::move(participant_groups), root_device, incarnations);
-}
-
-absl::StatusOr<CommunicatorHandle> GetComm(
-    const CollectiveParams& params, const CollectiveCliques& collective_cliques,
-    absl::Span<const ReplicaGroup> replica_groups,
-    CollectiveOpGroupMode group_mode, AsyncStreamKind stream_kind) {
-  TF_ASSIGN_OR_RETURN(
-      GpuCliqueKey clique_key,
-      GetGpuCliqueKey(params, replica_groups, group_mode, stream_kind));
-
-  std::optional<RankId> rank = clique_key.rank(params.global_device_id);
-  TF_ASSIGN_OR_RETURN(Communicator * comm,
-                      collective_cliques.GetComm(clique_key, *rank));
-
-  return CommunicatorHandle(comm, std::move(clique_key));
 }
 
 }  // namespace xla::gpu
