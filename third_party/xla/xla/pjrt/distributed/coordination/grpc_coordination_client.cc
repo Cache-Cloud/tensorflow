@@ -53,8 +53,6 @@ using tensorflow::GetKeyValueDirRequest;
 using tensorflow::GetKeyValueDirResponse;
 using tensorflow::GetKeyValueRequest;
 using tensorflow::GetKeyValueResponse;
-using tensorflow::GetTaskStateRequest;
-using tensorflow::GetTaskStateResponse;
 using tensorflow::HeartbeatRequest;
 using tensorflow::HeartbeatResponse;
 using tensorflow::IncrementKeyValueRequest;
@@ -71,8 +69,6 @@ using tensorflow::ShutdownTaskRequest;
 using tensorflow::ShutdownTaskResponse;
 using tensorflow::TryGetKeyValueRequest;
 using tensorflow::TryGetKeyValueResponse;
-using tensorflow::WaitForAllTasksRequest;
-using tensorflow::WaitForAllTasksResponse;
 using tensorflow::WatchJobStateRequest;
 using tensorflow::WatchJobStateResponse;
 
@@ -130,16 +126,6 @@ class GrpcCoordinationClient : public CoordinationClient {
         &target_);
   }
 
-  void WaitForAllTasksAsync(const WaitForAllTasksRequest* request,
-                            WaitForAllTasksResponse* response,
-                            tsl::StatusCallback done) override {
-    new tsl::RPCState<tsl::protobuf::Message>(
-        &stub_, cq_, "/tensorflow.CoordinationService/WaitForAllTasks",
-        *request, response, std::move(done), /*call_opts=*/nullptr,
-        /*threadpool=*/nullptr, /*max_retries=*/0, /*fail_fast=*/true,
-        &target_);
-  }
-
   void ShutdownTaskAsync(tsl::CallOptions* call_opts,
                          const ShutdownTaskRequest* request,
                          ShutdownTaskResponse* response,
@@ -172,16 +158,6 @@ class GrpcCoordinationClient : public CoordinationClient {
         response, std::move(done), call_opts, /*threadpool=*/nullptr,
         /*max_retries=*/3,
         /*fail_fast=*/true, &target_);
-  }
-
-  void GetTaskStateAsync(const GetTaskStateRequest* request,
-                         GetTaskStateResponse* response,
-                         tsl::StatusCallback done) override {
-    new tsl::RPCState<tsl::protobuf::Message>(
-        &stub_, cq_, "/tensorflow.CoordinationService/GetTaskState", *request,
-        response, std::move(done), /*call_opts=*/nullptr,
-        /*threadpool=*/nullptr, /*max_retries=*/0, /*fail_fast=*/true,
-        &target_);
   }
 
   void WatchJobStateAsync(tsl::CallOptions* call_opts,

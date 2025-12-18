@@ -349,35 +349,6 @@ void CoordinationServiceAgent::PollForErrorAsync(tsl::StatusCallback done) {
       });
 }
 
-absl::Status CoordinationServiceAgent::WaitForAllTasks(
-    const DeviceInfo& local_devices) {
-  absl::Status agent_running_status = ValidateRunningAgent();
-  if (!agent_running_status.ok()) {
-    return agent_running_status;
-  }
-  WaitForAllTasksRequest request;
-  *request.mutable_source_task() = task_;
-  *request.mutable_device_info() = local_devices;
-  VLOG(3) << "WaitForAllTasksRequest: " << request.DebugString();
-  WaitForAllTasksResponse response;
-  absl::Status status;
-  absl::Notification n;
-  leader_client_->WaitForAllTasksAsync(&request, &response,
-                                       [&](const absl::Status& s) {
-                                         status = s;
-                                         n.Notify();
-                                       });
-  n.WaitForNotification();
-  if (!status.ok()) {
-    VLOG(3) << "WaitForAllTasksResponse: " << status;
-    SetError(status);
-    return status;
-  }
-  VLOG(3) << "WaitForAllTasksResponse: " << response.DebugString();
-  cluster_devices_ = response.device_info();
-  return absl::OkStatus();
-}
-
 const DeviceInfo& CoordinationServiceAgent::GetClusterDeviceInfo() {
   return cluster_devices_;
 }
@@ -389,29 +360,6 @@ absl::StatusOr<CoordinatedTask> CoordinationServiceAgent::GetOwnTask() {
         "know the associated task yet."));
   }
   return task_;
-}
-
-absl::StatusOr<std::vector<CoordinatedTaskStateInfo>>
-CoordinationServiceAgent::GetTaskState(
-    const std::vector<CoordinatedTask>& tasks) {
-  GetTaskStateRequest request;
-  *request.mutable_source_task() = {tasks.begin(), tasks.end()};
-  GetTaskStateResponse response;
-  absl::Notification n;
-  absl::StatusOr<std::vector<CoordinatedTaskStateInfo>> result;
-  leader_client_->GetTaskStateAsync(
-      &request, &response, [&](const absl::Status& s) {
-        if (s.ok()) {
-          result = std::vector<CoordinatedTaskStateInfo>(
-              std::make_move_iterator(response.task_state().begin()),
-              std::make_move_iterator(response.task_state().end()));
-        } else {
-          result = s;
-        }
-        n.Notify();
-      });
-  n.WaitForNotification();
-  return result;
 }
 
 std::shared_ptr<tsl::CallOptions> CoordinationServiceAgent::WatchJobStateAsync(

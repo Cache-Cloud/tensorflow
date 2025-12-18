@@ -120,10 +120,6 @@ class TestCoordinationClient : public CoordinationClient {
               (const GetAliveTasksRequest*, GetAliveTasksResponse*,
                tsl::StatusCallback),
               (override));
-  MOCK_METHOD(void, GetTaskStateAsync,
-              (const GetTaskStateRequest*, GetTaskStateResponse*,
-               tsl::StatusCallback),
-              (override));
   MOCK_METHOD(void, WatchJobStateAsync,
               (tsl::CallOptions*, const WatchJobStateRequest*,
                WatchJobStateResponse*, tsl::StatusCallback),
@@ -136,16 +132,6 @@ class TestCoordinationClient : public CoordinationClient {
               (tsl::CallOptions * call_opts, const PollForErrorRequest*,
                PollForErrorResponse*, tsl::StatusCallback),
               (override));
-
-#define UNIMPLEMENTED(method)                                              \
-  void method##Async(const method##Request* request,                       \
-                     method##Response* response, tsl::StatusCallback done) \
-      override {                                                           \
-    done(absl::UnimplementedError(#method "Async"));                       \
-  }
-
-  UNIMPLEMENTED(WaitForAllTasks);
-#undef UNIMPLEMENTED
 };
 
 class CoordinationServiceAgentTest : public ::testing::Test {
@@ -162,8 +148,6 @@ class CoordinationServiceAgentTest : public ::testing::Test {
     ON_CALL(*client_, BarrierAsync(_, _, _, _))
         .WillByDefault(InvokeArgument<3>(absl::OkStatus()));
     ON_CALL(*client_, CancelBarrierAsync(_, _, _))
-        .WillByDefault(InvokeArgument<2>(absl::OkStatus()));
-    ON_CALL(*client_, GetTaskStateAsync(_, _, _))
         .WillByDefault(InvokeArgument<2>(absl::OkStatus()));
   }
 
